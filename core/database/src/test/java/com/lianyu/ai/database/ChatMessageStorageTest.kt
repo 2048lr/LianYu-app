@@ -90,7 +90,7 @@ class ChatMessageStorageTest {
 
         val decrypted = ChatMessageCrypto.decryptFromStorage(corrupted)
 
-        assertEquals(ChatMessageCrypto.P0, decrypted.content)
+        assertEquals(ChatMessageCrypto.DECRYPT_FAILED_PLACEHOLDER, decrypted.content)
         assertEquals("", decrypted.linkString)
     }
 

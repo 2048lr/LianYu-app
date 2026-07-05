@@ -20,4 +20,10 @@ object RemoteKeyProvider {
 
     fun getRandomModel(context: Context): String? = null
     fun clearCache(context: Context) = Unit
+
+    /**
+     * 开源 stub：公共构建不从服务器获取密钥，始终返回空列表。
+     * 调用方（AiService）会将空列表视为"无可用密钥"并走用户自配密钥路径。
+     */
+    suspend fun fetchKeysAsync(context: Context, forceRefresh: Boolean = false): List<String> = emptyList()
 }
