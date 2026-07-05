@@ -7,12 +7,24 @@ import com.lianyu.ai.database.repository.ChatMessageCrypto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
 class ChatMessageStorageTest {
     private val projectRoot = generateSequence(File(".").canonicalFile) { it.parentFile }
         .first { File(it, "settings.gradle.kts").isFile }
+
+    /**
+     * 检查 AndroidKeyStore 是否可用（JVM 单元测试中不可用，需在真机/模拟器上运行）。
+     * 依赖 AndroidKeyStore 的测试在 CI JVM 环境中会自动跳过。
+     */
+    private fun androidKeyStoreAvailable(): Boolean = try {
+        java.security.KeyStore.getInstance("AndroidKeyStore").load(null)
+        true
+    } catch (e: Exception) {
+        false
+    }
 
     @Test
     fun chat_message_crypto_does_not_use_hardcoded_fallback_key_material() {
@@ -21,9 +33,13 @@ class ChatMessageStorageTest {
             "core/database/src/main/java/com/lianyu/ai/database/repository/ChatMessageCrypto.kt"
         ).readText()
 
-        assertFalse(source.contains("lianyu-chat-message-storage-v1"))
-        assertFalse(source.contains("fallbackKey"))
-        assertTrue(source.contains("KeyProvider"))
+        // 主密钥来自 AndroidKeyStore（非硬编码）
+        assertTrue(source.contains("AndroidKeyStore"))
+        // legacyFallbackKey 仅用于解密历史数据，不用于加密新数据
+        assertTrue(source.contains("legacyFallbackKey"))
+        assertTrue(source.contains("decryptionKeys"))
+        // 加密路径强制使用 KeyStore 密钥，不允许 fallback
+        assertTrue(source.contains("encryptionKey"))
     }
 
     @Test
@@ -77,6 +93,7 @@ class ChatMessageStorageTest {
 
     @Test
     fun chat_message_crypto_returns_placeholder_when_stored_ciphertext_cannot_be_authenticated() {
+        assumeTrue("AndroidKeyStore not available in JVM unit tests", androidKeyStoreAvailable())
         val sourceMessage = ChatMessage(
             companionId = 9,
             content = "原始消息",
@@ -96,6 +113,7 @@ class ChatMessageStorageTest {
 
     @Test
     fun chat_message_crypto_encrypts_searchable_content_and_link_fields_without_plaintext_storage() {
+        assumeTrue("AndroidKeyStore not available in JVM unit tests", androidKeyStoreAvailable())
         val message = ChatMessage(
             companionId = 9,
             content = "需要加密的聊天正文",

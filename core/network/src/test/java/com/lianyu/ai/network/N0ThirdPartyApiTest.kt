@@ -4,7 +4,6 @@ import okhttp3.Interceptor
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,8 +44,9 @@ class N0ThirdPartyApiTest {
 
         interceptor.intercept(chain)
 
+        // 开源 stub 不附加任何安全头（私有版本会附加 X-LianYu-Sig 等）
         assertTrue(chain.proceeded)
-        assertEquals("abc123", chain.proceededRequest?.header("X-LianYu-Sig"))
+        assertNull(chain.proceededRequest?.header("X-LianYu-Sig"))
     }
 
     private class RecordingChain(

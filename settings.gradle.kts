@@ -17,11 +17,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // 厂商 Push SDK 仓库：华为 HMS（必须在阿里云镜像之前，
+        // 否则阿里云对 HMS 工件返回 502 会禁用整个仓库链）
+        maven { url = uri("https://developer.huawei.com/repo/") }
         maven { url = uri("https://maven.aliyun.com/repository/google") }
         maven { url = uri("https://maven.aliyun.com/repository/public") }
         maven { url = uri("https://maven.aliyun.com/repository/central") }
-        // 厂商 Push SDK 仓库：华为 HMS
-        maven { url = uri("https://developer.huawei.com/repo/") }
     }
 }
 

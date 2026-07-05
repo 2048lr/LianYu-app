@@ -26,4 +26,9 @@ object RemoteKeyProvider {
      * 调用方（AiService）会将空列表视为"无可用密钥"并走用户自配密钥路径。
      */
     suspend fun fetchKeysAsync(context: Context, forceRefresh: Boolean = false): List<String> = emptyList()
+
+    /**
+     * 开源 stub：公共构建不持久化服务器握手结果，空实现。
+     */
+    fun storeHandshakeResult(context: Context, handshakeJson: JSONObject) = Unit
 }
