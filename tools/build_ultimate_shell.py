@@ -26,7 +26,17 @@ APKTOOL = PROJECT / "tools" / "apktool.jar"
 KEYSTORE = PROJECT / "release.keystore"
 STORE_PASS = os.environ.get("LIANYU_STORE_PASSWORD", "")
 KEY_PASS = os.environ.get("LIANYU_KEY_PASSWORD", "")
-KS_ALIAS = "your_alias"
+KS_ALIAS = os.environ.get("LIANYU_KEY_ALIAS", "")
+# 强制要求环境变量 LIANYU_KEY_ALIAS，不再使用硬编码回退值
+if not KS_ALIAS:
+    print("ERROR: LIANYU_KEY_ALIAS environment variable is required")
+    sys.exit(1)
+if not STORE_PASS:
+    print("ERROR: LIANYU_STORE_PASSWORD environment variable is required")
+    sys.exit(1)
+if not KEY_PASS:
+    print("ERROR: LIANYU_KEY_PASSWORD environment variable is required")
+    sys.exit(1)
 
 SHELL_SRC = PROJECT / "app/build/tmp/ultimate_shell/src"
 BUILD_DIR = PROJECT / "app/build/tmp/ultimate_shell/build"

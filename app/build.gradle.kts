@@ -22,7 +22,8 @@ android {
         // Developer: 苏苏 / Organization: LianYu
 
         // Force multi-DEX output
-        multiDexEnabled = true
+        multiDexEnabled = true
+
 
         manifestPlaceholders[
             "VIVO_PUSH_API_KEY"] = project.findProperty("VIVO_PUSH_API_KEY")?.toString() ?: ""
@@ -46,23 +47,44 @@ android {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // 自定义应用签名机制（Custom App Signing）
+    // ─────────────────────────────────────────────────────────────
+    // 所有敏感信息（keystore 路径、别名、密码）只通过环境变量或
+    // ~/.gradle/gradle.properties 注入，绝不硬编码到脚本中。
+    // CI 环境通过 GitHub Secrets 注入（详见 .github/workflows/android-build.yml）。
+    //
+    // 所需环境变量：
+    //   LIANYU_STORE_PASSWORD  keystore 密码
+    //   LIANYU_KEY_ALIAS       密钥别名
+    //   LIANYU_KEY_PASSWORD    密钥密码
+    // ─────────────────────────────────────────────────────────────
     signingConfigs {
         create("release") {
+            // keystore 文件位置：项目根目录下的 release.keystore
+            // 该文件已在 .gitignore 中，永远不会被提交
             storeFile = file("../release.keystore")
-            storePassword = System.getenv("LIANYU_STORE_PASSWORD") ?: project.findProperty("LIANYU_STORE_PASSWORD") as String? ?: "debug_password_placeholder"
-            keyAlias = System.getenv("LIANYU_KEY_ALIAS") ?: project.findProperty("LIANYU_KEY_ALIAS") as String? ?: "your_alias"
-            keyPassword = System.getenv("LIANYU_KEY_PASSWORD") ?: project.findProperty("LIANYU_KEY_PASSWORD") as String? ?: "debug_password_placeholder"
+            storePassword = System.getenv("LIANYU_STORE_PASSWORD")
+                ?: project.findProperty("LIANYU_STORE_PASSWORD") as String?
+            keyAlias = System.getenv("LIANYU_KEY_ALIAS")
+                ?: project.findProperty("LIANYU_KEY_ALIAS") as String?
+            keyPassword = System.getenv("LIANYU_KEY_PASSWORD")
+                ?: project.findProperty("LIANYU_KEY_PASSWORD") as String?
+            enableV1Signing = false
+            enableV2Signing = true
             enableV3Signing = true
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            // Debug 构建使用 Android 默认 debug 签名，避免本地开发时依赖生产密钥
             isMinifyEnabled = false
             isDebuggable = true
         }
         release {
+            // Release 构建强制使用自定义 release 签名
+            // 若环境变量未配置，构建会在签名阶段失败（明确的失败优于静默使用错误签名）
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = false  // Shell loads DEX from assets — must not strip

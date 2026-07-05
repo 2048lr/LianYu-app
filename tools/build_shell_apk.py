@@ -28,7 +28,17 @@ APK_OUT = PROJECT / "app" / "build" / "outputs" / "apk" / "release" / "app-relea
 KEYSTORE = PROJECT / "release.keystore"
 STORE_PASS = os.environ.get("LIANYU_STORE_PASSWORD", "")
 KEY_PASS = os.environ.get("LIANYU_KEY_PASSWORD", "")
-KEY_ALIAS = os.environ.get("LIANYU_KEY_ALIAS", "your_alias")
+KEY_ALIAS = os.environ.get("LIANYU_KEY_ALIAS", "")
+# 强制要求环境变量，不再使用硬编码回退值
+if not KEY_ALIAS:
+    print("ERROR: LIANYU_KEY_ALIAS environment variable is required")
+    sys.exit(1)
+if not STORE_PASS:
+    print("ERROR: LIANYU_STORE_PASSWORD environment variable is required")
+    sys.exit(1)
+if not KEY_PASS:
+    print("ERROR: LIANYU_KEY_PASSWORD environment variable is required")
+    sys.exit(1)
 SHELL_SRC = PROJECT / "app" / "build" / "tmp" / "shell_src"
 SHELL_CLASSES = PROJECT / "app" / "build" / "tmp" / "shell_classes"
 MINIMAL_DEX = PROJECT / "app" / "build" / "tmp" / "minimal_dex_out"

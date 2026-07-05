@@ -108,13 +108,17 @@ python3 tools/strip_classes_dex.py "$APK_PATH" --output "$STRIPPED_APK"
 # ── Step 8: Strip @Metadata + 4-way DEX split ──
 echo ""
 echo "[Step 8/9] Stripping @Metadata annotations + DEX split..."
+# 强制要求环境变量，不再使用硬编码回退值
+: "${LIANYU_STORE_PASSWORD:?LIANYU_STORE_PASSWORD is required (set via env or ~/.gradle/gradle.properties)}"
+: "${LIANYU_KEY_ALIAS:?LIANYU_KEY_ALIAS is required (set via env or ~/.gradle/gradle.properties)}"
+: "${LIANYU_KEY_PASSWORD:?LIANYU_KEY_PASSWORD is required (set via env or ~/.gradle/gradle.properties)}"
 python3 tools/strip_metadata.py "$STRIPPED_APK"
 python3 tools/split_dex.py \
     --apk "$STRIPPED_APK" --splits 4 \
     --keystore "${KEYSTORE:-../release.keystore}" \
-    --storepass "${LIANYU_STORE_PASSWORD:-3498762309}" \
-    --keyalias "${LIANYU_KEY_ALIAS:-your_alias}" \
-    --keypass "${LIANYU_KEY_PASSWORD:-3498762309}"
+    --storepass "${LIANYU_STORE_PASSWORD}" \
+    --keyalias "${LIANYU_KEY_ALIAS}" \
+    --keypass "${LIANYU_KEY_PASSWORD}"
 
 # ── Step 9: Re-sign final APK ──
 echo ""
@@ -123,9 +127,9 @@ cp "$STRIPPED_APK" "$APK_PATH"
 if command -v apksigner &> /dev/null && [ -f "../release.keystore" ]; then
     apksigner sign \
         --ks ../release.keystore \
-        --ks-pass pass:"${LIANYU_STORE_PASSWORD:-3498762309}" \
-        --ks-key-alias "${LIANYU_KEY_ALIAS:-your_alias}" \
-        --key-pass pass:"${LIANYU_KEY_PASSWORD:-3498762309}" \
+        --ks-pass pass:"${LIANYU_STORE_PASSWORD}" \
+        --ks-key-alias "${LIANYU_KEY_ALIAS}" \
+        --key-pass pass:"${LIANYU_KEY_PASSWORD}" \
         --v1-signing-enabled false \
         --v2-signing-enabled true \
         --v3-signing-enabled true \

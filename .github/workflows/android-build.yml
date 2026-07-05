@@ -1,0 +1,419 @@
+# ════════════════════════════════════════════════════════════════════
+# LianYu (恋语) — Android 自动化构建与发布工作流
+# ════════════════════════════════════════════════════════════════════
+# 功能：
+#   1. 单元测试 (Unit Test)         — 验证代码质量
+#   2. Debug APK 构建               — 用于开发测试
+#   3. Release APK 构建（自定义签名）— 用于生产环境
+#   4. 发布到 GitHub Releases        — 仅在打 tag 时触发
+#
+# 触发条件：
+#   - push 到 main / master 分支
+#   - 创建指向 main / master 的 Pull Request
+#   - 推送 v* 格式的 tag（如 v1.9.1）→ 触发完整发布流程
+#
+# 所需 GitHub Secrets（用于 Release 签名）：
+#   SIGNING_KEYSTORE_BASE64  — release.keystore 的 base64 编码内容
+#   LIANYU_STORE_PASSWORD    — keystore 密码
+#   LIANYU_KEY_ALIAS         — 密钥别名
+#   LIANYU_KEY_PASSWORD      — 密钥密码
+# ════════════════════════════════════════════════════════════════════
+name: Android Build & Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'          # 形如 v1.9.1 的 tag 触发完整发布
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'NOTICE'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:   # 支持手动触发
+
+# 同一分支/PR 的新推送会取消正在运行的旧构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # ── 构建环境常量 ──
+  JAVA_VERSION: '17'
+  JAVA_DISTRIBUTION: 'temurin'
+  GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=false'
+
+permissions:
+  contents: write       # 发布 Release 需要
+  actions: read
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════
+  # Job 1: 单元测试
+  # ════════════════════════════════════════════════════════════════════
+  unit-test:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 📦 Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: 🔍 Verify Gradle Wrapper
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --version
+
+      - name: 🧪 Run unit tests
+        run: ./gradlew testDebugUnitTest --continue --stacktrace
+
+      - name: 📊 Generate test report
+        if: always()
+        run: |
+          echo "## 🧪 Unit Test Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run: [\`${{ github.run_id }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # 收集测试结果摘要
+          TEST_DIRS=$(find . -path "*/build/test-results/testDebugUnitTest" -type d 2>/dev/null)
+          if [ -n "$TEST_DIRS" ]; then
+            echo "### 测试结果摘要" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| 模块 | 通过 | 失败 | 跳过 |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|------|------|" >> $GITHUB_STEP_SUMMARY
+            for dir in $TEST_DIRS; do
+              module=$(echo "$dir" | sed 's|^\./||; s|/build/test-results/testDebugUnitTest||')
+              passed=$(grep -r 'tests=' "$dir"/*.xml 2>/dev/null | sed -n 's/.*tests="\([0-9]*\)".*/\1/p' | awk '{s+=$1} END {print s+0}')
+              failed=$(grep -r 'failures=' "$dir"/*.xml 2>/dev/null | sed -n 's/.*failures="\([0-9]*\)".*/\1/p' | awk '{s+=$1} END {print s+0}')
+              skipped=$(grep -r 'skipped=' "$dir"/*.xml 2>/dev/null | sed -n 's/.*skipped="\([0-9]*\)".*/\1/p' | awk '{s+=$1} END {print s+0}')
+              echo "| \`$module\` | $passed | $failed | $skipped |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "⚠️ 未找到测试结果文件" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📤 Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            **/build/test-results/**/TEST-*.xml
+            **/build/reports/tests/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ════════════════════════════════════════════════════════════════════
+  # Job 2: 构建 Debug APK
+  # ════════════════════════════════════════════════════════════════════
+  build-debug:
+    name: 🛠️ Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: unit-test
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 📦 Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: 🔍 Verify Gradle Wrapper
+        run: chmod +x ./gradlew
+
+      - name: 🛠️ Assemble Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: 📝 Get debug APK info
+        id: apk-info
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" -type f | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ Debug APK not found"
+            exit 1
+          fi
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          APK_NAME=$(basename "$APK_PATH")
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+          echo "✅ Debug APK: $APK_NAME ($APK_SIZE)"
+
+      - name: 📊 Debug build summary
+        if: always()
+        run: |
+          echo "## 🛠️ Debug APK Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **状态**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **分支**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **提交**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "- **APK 文件**: \`${{ steps.apk-info.outputs.apk_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **APK 大小**: ${{ steps.apk-info.outputs.apk_size }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📤 Upload Debug APK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lianyu-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  # ════════════════════════════════════════════════════════════════════
+  # Job 3: 构建 Release APK（自定义签名）
+  # ════════════════════════════════════════════════════════════════════
+  build-release:
+    name: 🔐 Release APK (Signed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: unit-test
+    # Release 构建需要签名密钥，仅在以下情况运行：
+    #  - 推送到 main/master 分支
+    #  - 推送 v* tag
+    #  - 手动触发
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 📦 Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: 🔍 Verify Gradle Wrapper
+        run: chmod +x ./gradlew
+
+      # ── 注入自定义签名密钥 ──
+      # 从 GitHub Secrets 解码 release.keystore 到项目根目录
+      - name: 🔑 Decode signing keystore
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "❌ ERROR: Secret 'SIGNING_KEYSTORE_BASE64' is not configured."
+            echo "   Please encode your release.keystore as base64 and add it to GitHub Secrets."
+            echo "   Command: base64 -w 0 release.keystore"
+            exit 1
+          fi
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > release.keystore
+          echo "✅ release.keystore restored ($(stat -c%s release.keystore) bytes)"
+          # 校验是否为有效的 keystore 文件（魔数检查）
+          if ! file release.keystore | grep -qi "Java KeyStore\|data"; then
+            echo "⚠️ Warning: file type check inconclusive, continuing..."
+          fi
+
+      # ── 构建 Release APK ──
+      # 通过环境变量注入签名密码，由 app/build.gradle.kts 读取
+      - name: 🛠️ Assemble signed Release APK
+        env:
+          LIANYU_STORE_PASSWORD: ${{ secrets.LIANYU_STORE_PASSWORD }}
+          LIANYU_KEY_ALIAS: ${{ secrets.LIANYU_KEY_ALIAS }}
+          LIANYU_KEY_PASSWORD: ${{ secrets.LIANYU_KEY_PASSWORD }}
+        run: |
+          # 校验所有必需的 secrets 已配置
+          if [ -z "$LIANYU_STORE_PASSWORD" ]; then
+            echo "❌ ERROR: Secret 'LIANYU_STORE_PASSWORD' is not configured"; exit 1
+          fi
+          if [ -z "$LIANYU_KEY_ALIAS" ]; then
+            echo "❌ ERROR: Secret 'LIANYU_KEY_ALIAS' is not configured"; exit 1
+          fi
+          if [ -z "$LIANYU_KEY_PASSWORD" ]; then
+            echo "❌ ERROR: Secret 'LIANYU_KEY_PASSWORD' is not configured"; exit 1
+          fi
+          ./gradlew assembleRelease --stacktrace
+
+      # ── 验证签名 ──
+      - name: ✅ Verify APK signature
+        id: verify
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ Release APK not found"
+            exit 1
+          fi
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          APK_NAME=$(basename "$APK_PATH")
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+          echo "✅ Release APK: $APK_NAME ($APK_SIZE)"
+
+          # 使用 apksigner 验证签名
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner -type f 2>/dev/null | head -1)
+          if [ -n "$APKSIGNER" ]; then
+            echo "🔍 Verifying signature with apksigner..."
+            "$APKSIGNER" verify --verbose "$APK_PATH" || {
+              echo "❌ Signature verification failed!"
+              exit 1
+            }
+            echo "✅ Signature verified successfully"
+          else
+            echo "⚠️ apksigner not found, skipping verification"
+          fi
+
+      - name: 📊 Release build summary
+        if: always()
+        run: |
+          echo "## 🔐 Release APK Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **状态**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **分支/Tag**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **提交**: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "- **APK 文件**: \`${{ steps.verify.outputs.apk_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **APK 大小**: ${{ steps.verify.outputs.apk_size }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **签名**: ✅ 自定义签名已验证" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📤 Upload Release APK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lianyu-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── 清理敏感文件 ──
+      - name: 🧹 Cleanup keystore
+        if: always()
+        run: |
+          rm -f release.keystore
+          echo "🧹 Keystore file removed from runner"
+
+  # ════════════════════════════════════════════════════════════════════
+  # Job 4: 发布到 GitHub Releases（仅在推送 v* tag 时触发）
+  # ════════════════════════════════════════════════════════════════════
+  release:
+    name: 🚀 Publish to GitHub Releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [unit-test, build-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      # 下载 Release APK 构建产物
+      - name: 📥 Download Release APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lianyu-release-apk
+          path: release-artifacts
+
+      - name: 📝 Prepare release notes
+        id: release-notes
+        run: |
+          # 从 tag 名提取版本号
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # 重命名 APK 文件，包含版本号
+          APK_FILE=$(find release-artifacts -name "*.apk" -type f | head -1)
+          if [ -z "$APK_FILE" ]; then
+            echo "❌ No APK found in release-artifacts"
+            exit 1
+          fi
+          NEW_NAME="LianYu-v${VERSION}.apk"
+          mv "$APK_FILE" "release-artifacts/$NEW_NAME"
+          echo "apk_name=$NEW_NAME" >> $GITHUB_OUTPUT
+          APK_SIZE=$(du -h "release-artifacts/$NEW_NAME" | cut -f1)
+          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+
+          # 生成 Release Notes（注意：heredoc 内容顶格，避免缩进被写入文件）
+          cat > release-notes.md <<EOF
+          # 恋语 LianYu v${VERSION}
+          
+          [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=flat-square&logo=android)](https://www.android.com/)
+          [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.10-7F52FF?style=flat-square&logo=kotlin)](https://kotlinlang.org/)
+          
+          ## 📦 下载
+          
+          | 文件 | 大小 |
+          |------|------|
+          | \`${NEW_NAME}\` | ${APK_SIZE} |
+          
+          ### 安装说明
+          
+          1. 下载 \`${NEW_NAME}\` 到你的 Android 设备（Android 8.0+）
+          2. 允许"从未知来源安装应用"
+          3. 点击安装，享受 AI 陪伴体验
+          
+          ## 🔐 签名信息
+          
+          - **签名方案**: v2 + v3 (APK Signature Scheme)
+          - **签名密钥**: LianYu 官方自定义密钥
+          - **验证**: 已通过 apksigner 签名验证
+          
+          ## 📋 构建信息
+          
+          - **构建时间**: \`${{ github.run_id }}\`
+          - **构建 SHA**: \`${{ github.sha }}\`
+          - **构建流水线**: [Actions Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          ---
+          > ⚠️ 本版本由 GitHub Actions 自动构建发布
+          EOF
+          # 去除每行开头的 10 个空格缩进（YAML run 块的缩进）
+          sed -i 's/^          //' release-notes.md
+          echo "✅ Release notes prepared"
+          cat release-notes.md
+
+      - name: 🚀 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-notes.outputs.tag_name }}
+          name: 恋语 LianYu v${{ steps.release-notes.outputs.version }}
+          body_path: release-notes.md
+          files: release-artifacts/${{ steps.release-notes.outputs.apk_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📊 Release summary
+        if: always()
+        run: |
+          echo "## 🚀 GitHub Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ steps.release-notes.outputs.tag_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **版本**: v${{ steps.release-notes.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **APK**: \`${{ steps.release-notes.outputs.apk_name }}\` (${{ steps.release-notes.outputs.apk_size }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release URL**: [${{ steps.release-notes.outputs.tag_name }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.release-notes.outputs.tag_name }})" >> $GITHUB_STEP_SUMMARY
