@@ -4,6 +4,7 @@
 Checks:
   - APK exists and is a zip
   - classes*.dex do not contain high-value prompt/debug strings
+  - classes*.dex do not leak high-signal business/security class names (release only)
   - APK does not contain Compose PreviewActivity
   - release APK is not debuggable by manifest string heuristics
 
@@ -26,6 +27,16 @@ SENSITIVE_PATTERNS = [
     "字数15-40",
     ">>> SG:",
     "SecurityGuard CRASH",
+]
+
+# 高价值业务/安全符号：发布版 DEX 中不应以类名形式残留。
+# R8/ProGuard 应将这些类进一步混淆，若在 release DEX 中发现原名，说明混淆配置缺失或被绕过。
+BLACKBOX_DEX_PATTERNS = [
+    "ChatMessageCrypto",          # 聊天消息加密入口（密钥派生/解密占位）
+    "ApiConfigSecretCodec",       # API 配置项的加解密封装
+    "RequestSecurityInterceptor", # 请求安全拦截器（签名/防重放）
+    "M0",                         # 微信消息模型（短名混淆 stub）
+    "A0",                         # 微信账号/令牌模型（短名混淆 stub）
 ]
 
 FORBIDDEN_COMPONENTS = [
@@ -61,6 +72,17 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def check_blackbox_patterns(dex_text: str) -> None:
+    """扫描 release DEX 中是否残留高价值业务/安全类名。
+
+    使用前后非单词字符边界匹配，避免短名（M0/A0）误报为随机子串。
+    """
+    for symbol in BLACKBOX_DEX_PATTERNS:
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])")
+        if pattern.search(dex_text):
+            fail(f"blackbox-sensitive symbol found in release DEX: {symbol}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("apk", type=Path)
@@ -86,6 +108,9 @@ def main() -> int:
         if "AndroidManifest.xml" in names:
             all_text += "\n" + "\n".join(printable_strings(apk.read("AndroidManifest.xml")))
         if args.release:
+            # 发布版额外检查：DEX 中不得残留高价值业务/安全类名
+            check_blackbox_patterns(dex_text)
+
             for component in FORBIDDEN_COMPONENTS:
                 if component in all_text:
                     fail(f"forbidden debug component found: {component}")
@@ -95,7 +120,9 @@ def main() -> int:
 
     print(f"OK: {args.apk}")
     print("OK: no sensitive prompt/debug strings in DEX")
-    print("OK: no forbidden debug components found")
+    if args.release:
+        print("OK: no blackbox-sensitive symbols in release DEX")
+        print("OK: no forbidden debug components found")
     return 0
 
 
