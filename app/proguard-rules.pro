@@ -29,6 +29,13 @@
 
 # P2-15: 阻止 R8 内联 Dex2C 白名单方法，确保转译器能找到字节码
 # 使用 <methods> 匹配所有方法（ProGuard 不支持 *** 通配符）
+-keepclassmembers class com.lianyu.ai.security.LianYuShellApplication {
+    <methods>;
+}
+-keepclassmembers class com.lianyu.ai.security.G0 {
+    <methods>;
+}
+-keepclassmembers class com.lianyu.ai.security.SActivity {
     <methods>;
 }
 -keepclassmembers class com.lianyu.ai.security.SecurityOrchestrator {
@@ -37,11 +44,7 @@
 -keepclassmembers class com.lianyu.ai.security.Sm4Cipher {
     <methods>;
 }
-    <methods>;
-}
 -keepclassmembers class com.lianyu.ai.security.SecurityGuard {
-    <methods>;
-}
     <methods>;
 }
 
